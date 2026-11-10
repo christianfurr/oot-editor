@@ -179,6 +179,13 @@ html.landing { overflow: hidden; }
         <label>Rupees<input id="rupees" type="number" min="0" step="1" required></label>
       </div>
       <p id="limits" class="muted"></p>
+      <h3>Quick Edits</h3>
+      <div class="controls">
+        <button id="quick-heal" type="button">Refill Hearts &amp; Magic</button>
+        <button id="quick-rupees" type="button">Fill Wallet</button>
+        <button id="quick-ammo" type="button">Refill Owned Ammo</button>
+      </div>
+      <p id="quick-result" class="muted" aria-live="polite"></p>
       <h3>Bags and Quivers</h3>
       <p class="muted">Unlock capacity upgrades directly, or select a smaller Seed Bag you already own. Quantities must fit the selected capacity.</p>
       <div id="capacity-upgrades" class="grid"></div>
@@ -187,8 +194,9 @@ html.landing { overflow: hidden; }
       <p id="capacity-notice" class="muted" aria-live="polite"></p>
       <h3>Bottles</h3>
       <div class="grid"><label>Bottle Count<input id="bottles" type="number" min="0" max="5" step="1" required></label></div>
+      <div class="grid"><label>Fill Empty Bottles<select id="bottle-fill"></select></label></div>
       <p id="bottle-info" class="muted"></p>
-      <p class="muted">New bottles are empty. Reducing the count removes the last occupied slots and their contents.</p>
+      <p class="muted">The fill option affects empty bottles only. Reducing the count removes the last occupied slots and their contents.</p>
       <details>
         <summary>Small Keys by Area</summary>
         <p class="muted">Edit the number of keys you carry. Doors, chests, and pickups have separate states.</p>
@@ -243,6 +251,7 @@ html.landing { overflow: hidden; }
   <section id="export-section">
     <h2>Save Patch</h2>
     <div class="controls">
+      <button hidden id="apply-profile" class="primary" type="submit" form="edit">Apply to Profile…</button>
       <button id="export" class="primary" type="submit" form="edit">Save Patch ZIP</button>
       <button id="export-folder" type="submit" form="edit">Export to Folder</button>
       <button id="reset" type="button">Reset All Edits</button>
@@ -324,11 +333,17 @@ const desktop = (() => {
     })) });
   }
 
+  function applyProfile(edits) {
+    return send('applyProfile', { edits: edits.map(({ path, before, after }) => ({
+      path, before: base64(before), after: base64(after),
+    })) });
+  }
+
   function setWorkspaceLoaded(loaded) {
     host.postMessage({ action: 'workspace', loaded });
   }
 
-  return { openBackup, savePatch, saveFolder, setWorkspaceLoaded };
+  return { openBackup, savePatch, saveFolder, applyProfile, setWorkspaceLoaded };
 })();
 
 const HEX = (n, width = 8) => '0x' + n.toString(16).toUpperCase().padStart(width, '0');
@@ -386,6 +401,7 @@ const bottleContents = new Map([
   [0x0F24E808, "letter"], [0xCDC21471, "Big Poe"], [0x02084F9E, "Poe"],
   [0x74D62ECB, "bug"], [0x6F49E357, "fairy"], [0x73356827, "milk"], [0xEEF6E4B0, "half milk"],
 ]);
+const refillContents = new Set([0xEABA6067, 0x049D37C1, 0xF383D6E5, 0x6F49E357, 0x73356827]);
 const quantityFields = [...supplies, ...smallKeys];
 const key = { rupees: 0xA77921D7, limit: 0xE0010A50, wallet: 0x3E42AFFA, previewRupees: 0xA9557547 };
 const vitalsFields = [
@@ -665,6 +681,14 @@ function updateSlot(slot, changes, editCatalog) {
     }
   }
   setBottleCount(slot, p, checkedInt(changes.bottles, bottleSlots.length, "Bottles"));
+  if (changes.bottleFill) {
+    if (!refillContents.has(changes.bottleFill)) throw Error("Unsupported bottle contents.");
+    for (const [stock, valid, content] of bottleSlots) {
+      if (p.int(stock) === 1 && p.int(valid) === 1 && p.u32(p.at(content)) === emptyBottle) {
+        p.view.setUint32(p.at(content), changes.bottleFill, true);
+      }
+    }
+  }
   for (const hash of changes.additions) {
     if (!editCatalog.addable.has(hash) || slot.p.int(hash) !== 0) {
       throw Error("This item cannot be added here: " + HEX(hash));
@@ -906,9 +930,13 @@ function initialize() {
   let flagPage = 0;
   let imageUrl;
   let revision = 0;
+  let appliedRevision;
   const perPage = 80;
 
   for (const w of wallets) wallet.add(new Option(w.label + ' · ' + w.limit, w.id));
+  const bottleFill = get('bottle-fill');
+  bottleFill.add(new Option('Keep contents', '0'));
+  for (const id of refillContents) bottleFill.add(new Option(bottleContents.get(id), String(id)));
   for (const [value, label] of voiceLanguages) voiceSelect.add(new Option(label, String(value)));
   const element = (tag, text) => {
     const el = document.createElement(tag);
@@ -1003,6 +1031,8 @@ function initialize() {
     get('fill-magic').disabled = Number(maxMagicSelect.value) === 0;
   }
   function reset() {
+    get('quick-result').textContent = '';
+    get('apply-profile').disabled = revision === appliedRevision;
     wallet.value = state.w.id;
     get('rupees').value = state.rupees;
     const vitals = state.vitals;
@@ -1035,6 +1065,7 @@ function initialize() {
       ? ["Slot " + (i + 1) + ' · ' + (bottleContents.get(b.content) ?? HEX(b.content))]
       : []);
     get('bottles').value = owned.length;
+    bottleFill.value = '0';
     if (options) voiceSelect.value = String(options.language);
     get('bottle-info').textContent = owned.length ? "In save: " + owned.join(', ') : "In save: 0 bottles";
     inventoryAdditions.clear();
@@ -1295,6 +1326,24 @@ function initialize() {
   get('max-hearts').addEventListener('input', updateVitalLimits);
   maxMagicSelect.addEventListener('change', updateVitalLimits);
   get('fill-magic').addEventListener('click', () => { get('magic').value = maxMagicSelect.value; });
+  get('quick-heal').addEventListener('click', () => {
+    get('hearts').value = get('max-hearts').value;
+    get('magic').value = maxMagicSelect.value;
+    get('quick-result').textContent = 'Health and magic refills are ready to apply or export.';
+  });
+  get('quick-rupees').addEventListener('click', () => {
+    get('rupees').value = get('rupees').max;
+    get('quick-result').textContent = 'The selected wallet will be filled to capacity.';
+  });
+  get('quick-ammo').addEventListener('click', () => {
+    for (const item of supplies) {
+      if (!item.group || state.capacities[item.group] <= 0 || (item.id === 'bombchu' && state.counts.bombchu === 0)) continue;
+      const input = amountInputs.get(item.id).input;
+      input.value = Math.min(state.capacities[item.group], Number(input.max));
+    }
+    updateCapacityNotice();
+    get('quick-result').textContent = 'Ammo refills use the capacities already unlocked in the save.';
+  });
   get('reset').addEventListener('click', reset);
   get('item-filter').addEventListener('input', inventory);
   get('item-status').addEventListener('change', inventory);
@@ -1312,7 +1361,11 @@ function initialize() {
     event.preventDefault();
     const button = get('export');
     const folderButton = get('export-folder');
+    const applyButton = get('apply-profile');
+    const toProfile = event.submitter === applyButton;
     const toFolder = event.submitter === folderButton;
+    if (toProfile && revision === appliedRevision) return;
+    applyButton.disabled = true;
     button.disabled = true;
     folderButton.disabled = true;
     result.textContent = '';
@@ -1324,7 +1377,7 @@ function initialize() {
           hearts: get('hearts').valueAsNumber, maxHearts: get('max-hearts').valueAsNumber,
           magic: get('magic').valueAsNumber, maxMagic: Number(maxMagicSelect.value),
         },
-        amounts: inputAmounts(), upgrades: inputUpgrades(), bottles: get('bottles').valueAsNumber,
+        amounts: inputAmounts(), upgrades: inputUpgrades(), bottles: get('bottles').valueAsNumber, bottleFill: Number(bottleFill.value),
         additions: inventoryAdditions, removals: inventoryRemovals, clearAcquisitions, flags: flagChanges,
       };
       const after = updateSlot(state, changes, editable);
@@ -1332,6 +1385,14 @@ function initialize() {
       const language = Number(voiceSelect.value);
       if (options && language !== options.language) {
         edits.push({ path: 'option.sav', before: options.save.bytes, after: updateOptions(options, language) });
+      }
+      if (toProfile) {
+        const saved = await desktop.applyProfile(edits);
+        if (current === revision) {
+          if (saved?.startsWith('Applied.')) appliedRevision = current;
+          result.textContent = saved || 'Apply canceled.';
+        }
+        return;
       }
       const { name, entries } = exportLayout(active, edits);
       let message = "Patch for " + active.id + " saved.";
@@ -1352,6 +1413,7 @@ function initialize() {
     } finally {
       button.disabled = false;
       folderButton.disabled = false;
+      applyButton.disabled = revision === appliedRevision;
     }
   });
 }

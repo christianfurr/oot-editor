@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$ROOT/build/OoT Editor.app/Contents/"{MacOS,Resources}
 APP="$ROOT/build/OoT Editor.app"
 xcrun swiftc -parse-as-library -O -warnings-as-errors -target arm64-apple-macosx26.0 \
-  "$ROOT/OoTEditor.swift" "$ROOT/SaveWorkshop.swift" -framework SwiftUI -framework AppKit -framework WebKit -o "$APP/Contents/MacOS/OoTEditor"
+  "$ROOT/OoTEditor.swift" "$ROOT/SaveWorkshop.swift" "$ROOT/SaveApply.swift" -framework SwiftUI -framework AppKit -framework WebKit -o "$APP/Contents/MacOS/OoTEditor"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$ROOT/Vendor/OOT-SW2SE/editor.html" "$APP/Contents/Resources/"
 cp "$ROOT/Vendor/OOT-SW2SE/LICENSE" "$APP/Contents/Resources/OOT-SW2SE-LICENSE"
@@ -16,8 +16,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>OoT Editor</string>
 <key>CFBundleExecutable</key><string>OoTEditor</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.0</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>0.3.0</string>
+<key>CFBundleVersion</key><string>3</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 </dict></plist>
 PLIST

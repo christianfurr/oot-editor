@@ -412,6 +412,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate,
     private var workspaceLoaded = false
     /// Folder of the last opened backup, used as the next panel's start folder.
     private var lastFolder: URL?
+    private let profileName: String?
+    private let applyEdits: ([[String: String]]) throws -> String
     /// Incremented on every page load (first load, crash recovery, or any
     /// other reload). Replies to requests made by an earlier page are
     /// dropped, because the new page reuses request ids starting from 1.
@@ -422,8 +424,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate,
 
     /// Creates the landing-size window and its web view, installs the bridge
     /// shim and starts loading the editor page.
-    init(defaultFolder: URL?) {
+    init(defaultFolder: URL?, profileName: String?, applyEdits: @escaping ([[String: String]]) throws -> String) {
         lastFolder = defaultFolder
+        self.profileName = profileName
+        self.applyEdits = applyEdits
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: Self.landingSize),
                               styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered, defer: false)
@@ -467,7 +471,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate,
         }
         // pageGeneration and the window layout are reset in didCommit, which
         // runs for this load and for any reload the user triggers.
-        webView.loadHTMLString(html.replacingOccurrences(of: "{{EDITOR_VERSION}}", with: editorVersion), baseURL: pageURL)
+        let page = html.replacingOccurrences(of: "{{EDITOR_VERSION}}", with: editorVersion)
+        webView.loadHTMLString(page.replacingOccurrences(of: "hidden id=\"apply-profile\"",
+                                                        with: profileName == nil ? "hidden id=\"apply-profile\"" : "id=\"apply-profile\""),
+                               baseURL: pageURL)
     }
 
     /// Resizes and recenters the window for the landing or editor view.
@@ -555,6 +562,21 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate,
             openBackup(completion: finish)
         case "saveFolder":
             saveFolder(entries: request["files"] as? [[String: String]], name: request["name"] as? String, completion: finish)
+        case "applyProfile":
+            guard let profileName, let window, let edits = request["edits"] as? [[String: String]] else {
+                finish(nil, HostError("This workshop is set up for export only."))
+                return
+            }
+            let alert = NSAlert()
+            alert.messageText = "Apply edits to the " + profileName + "?"
+            alert.informativeText = "Quit OoT first. The editor checks that the save still matches your copy and backs it up before applying."
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Apply Edits")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self, response == .alertSecondButtonReturn else { return finish(nil, nil) }
+                do { finish(try self.applyEdits(edits), nil) }
+                catch { finish(nil, error) }
+            }
         case "savePatch":
             savePatch(name: request["name"] as? String, contents: request["contents"] as? String, completion: finish)
         default:

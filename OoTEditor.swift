@@ -90,10 +90,10 @@ private struct EditorView: View {
             }
             GroupBox("Save Workshop") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Edit items, rupees, health, equipment and progression on a save copy. Export replacements as a folder or ZIP.")
+                    Text("Edit equipment, supplies, health and progression. Apply with a backup, or export a folder or ZIP.")
                         .font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        Button("Edit Test Save…") { showWorkshop(testProfile) }
+                        Button("Edit Test Save…") { showWorkshop(testProfile, target: testProfile, label: "Test Profile") }
                         Button("Edit Player Save Copy…") { openPlayerCopy() }.disabled(running || busy)
                         Spacer()
                         Button("Open Backups") { reveal(editorData.appending(path: "Backups")) }
@@ -217,10 +217,16 @@ private struct EditorView: View {
         return true
     }
 
-    private func showWorkshop(_ root: URL) {
+    private func showWorkshop(_ root: URL, target: URL, label: String) {
         guard !focusOpenWorkshop() else { return }
         let folder = saveAccount(in: root)
-        let editor = EditorWindowController(defaultFolder: folder)
+        let account = saveAccount(in: target)
+        let hasSingleAccount = account.deletingLastPathComponent().path == target.appending(path: "save").path
+        let editor = EditorWindowController(defaultFolder: folder, profileName: hasSingleAccount ? label : nil) { edits in
+            try withClosedGame {
+                try SaveApply.apply(edits, to: account, backups: editorData.appending(path: "Backups"))
+            }
+        }
         workshop = editor
         editor.showWindow(nil)
         editor.window?.makeKeyAndOrderFront(nil)
@@ -230,7 +236,7 @@ private struct EditorView: View {
         guard !focusOpenWorkshop() else { return }
         do {
             let copy = try withClosedGame { try createBackup() }
-            showWorkshop(copy)
+            showWorkshop(copy, target: profile, label: "Player Profile")
             message = "Created a copy. Choose Open Backup in Save Workshop to load it."
         } catch {
             message = error.localizedDescription

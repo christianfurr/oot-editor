@@ -12,6 +12,12 @@ A standalone companion for the MacNativeGames port of the Switch 2 Ocarina of Ti
 
 The Workshop edits copies and requires the game to be closed before applying. **Open Backups** shows snapshots created by the editor.
 
+## World travel and Ocarina
+
+- In **Save Workshop → World**, set **Destination on next load** to Hyrule Field, Kokiri Forest, or Kakariko Village. Apply the edits with OoT closed and load that save slot. The editor keeps Link’s era and quest progress.
+- Use the World tab to learn Epona’s Song, Sun’s Song, or all six warp songs. The editor adds the Fairy Ocarina if the save does not contain an ocarina.
+- To play a learned song from the editor, launch OoT from **Live Ocarina → Launch Player** or **Quick Start**. Open the ocarina in-game with Left on the D-pad and keep the default note layout. Then select **Summon Epona**, **Skip to Day or Night**, or a song destination and click **Play Song**. The game handles the song effect and any warp confirmation. Live Ocarina requires a native runtime with the SDK 22 vibration query fix. Older builds abort on the first note.
+
 ## Graphics and playtesting
 
 - **Player graphics** controls internal resolution, upscaling, frame cap, and interpolation for the next normal launch. Start with **1080p from 720p**, **MetalFX**, and **60 FPS** for more GPU headroom than native 1080p.
@@ -25,4 +31,4 @@ To use Quick Start, build and install [MacNativeGames Ocarina of Time](https://g
 
 ## Credits
 
-Save Workshop bundles the MIT-licensed [OOT-SW2SE editor by Traiver](https://github.com/Traiver/OOT-SW2SE/tree/de26f03d0a299e39e5536bf68eeef9b251fadba1). The bundled HTML adds quick edits, bottle filling, and an optional native Apply action. The macOS host is adapted in `SaveWorkshop.swift`, and its license is included under `Vendor/OOT-SW2SE`.
+Save Workshop bundles the MIT-licensed [OOT-SW2SE editor by Traiver](https://github.com/Traiver/OOT-SW2SE/tree/de26f03d0a299e39e5536bf68eeef9b251fadba1). The bundled HTML adds quick edits, bottle filling, travel, song unlocks, and an optional native Apply action. The macOS host is adapted in `SaveWorkshop.swift`, and its license is included under `Vendor/OOT-SW2SE`.

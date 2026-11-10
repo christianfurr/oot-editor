@@ -3,6 +3,7 @@ import Darwin
 import SwiftUI
 
 private let gameID = "org.macnativegames.oot"
+private let gameApp = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Applications/Ocarina of Time.app")
 private let fm = FileManager.default
 private let home = fm.homeDirectoryForCurrentUser
 private let support = home.appending(path: "Library/Application Support/MacNativeGames")
@@ -30,10 +31,26 @@ private struct EditorView: View {
     @State private var running = false
     @State private var busy = false
     @State private var workshop: EditorWindowController?
+    @State private var liveInput: URL?
+    @State private var livePID: pid_t?
+    @State private var song = 0
+    @State private var playingSong = false
+    @State private var supportsLiveOcarina = false
 
     private let canvasNames = ["720p from 480p", "720p native", "1080p from 720p", "1080p native",
                                "1440p from 1080p", "1440p native"]
     private let limits = [30, 40, 60, 72, 90, 120]
+    // Switch default note layout, sent as the runtime’s fixed Mac keycodes.
+    private let liveSongs: [(label: String, notes: [Int])] = [
+        ("Summon Epona", [34, 32, 38, 34, 32, 38]),
+        ("Skip to Day or Night", [38, 14, 34, 38, 14, 34]),
+        ("Warp to Sacred Forest Meadow", [12, 34, 32, 38, 32, 38]),
+        ("Warp to Death Mountain Crater", [14, 12, 14, 12, 38, 14, 38, 14]),
+        ("Warp to Lake Hylia", [12, 14, 38, 38, 32]),
+        ("Warp to the Graveyard", [32, 38, 38, 12, 32, 38, 14]),
+        ("Warp to Desert Colossus", [12, 14, 12, 38, 14, 12]),
+        ("Warp to the Temple of Time", [34, 38, 34, 38, 32, 34]),
+    ]
     private let interpolationNames = ["30+30 FPS", "40+40 FPS", "50+50 FPS", "Uncapped interpolation", "60+60 FPS"]
 
     var body: some View {
@@ -83,7 +100,7 @@ private struct EditorView: View {
                         Button("Open Player Save Folder") { reveal(profile.appending(path: "save")) }
                         Button("Back Up Player Save") { perform(backup) }.disabled(running || busy)
                         Spacer()
-                        Button("Quick Start", systemImage: "play.fill") { launchTest() }
+                        Button("Quick Start", systemImage: "play.fill") { launchGame(test: true) }
                             .buttonStyle(.borderedProminent).disabled(running || busy)
                     }
                 }.padding(8)
@@ -97,6 +114,21 @@ private struct EditorView: View {
                         Button("Edit Player Save Copy…") { openPlayerCopy() }.disabled(running || busy)
                         Spacer()
                         Button("Open Backups") { reveal(editorData.appending(path: "Backups")) }
+                    }
+                }.padding(8)
+            }
+            GroupBox("Live Ocarina") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(supportsLiveOcarina
+                         ? "Launch here, learn the song, then open the ocarina in-game with Left on the D-pad. Use the default note layout."
+                         : "Live songs require a native OoT runtime with the SDK 22 vibration fix.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Launch Player") { launchGame(test: false) }.disabled(running || busy)
+                        Picker("Song", selection: $song) {
+                            ForEach(liveSongs.indices, id: \.self) { Text(liveSongs[$0].label).tag($0) }
+                        }
+                        Button("Play Song") { playSong() }.disabled(!supportsLiveOcarina || !running || livePID == nil || playingSong)
                     }
                 }.padding(8)
             }
@@ -115,7 +147,12 @@ private struct EditorView: View {
             }
         }
         .onChange(of: running) { _, active in
-            if !active { loadSettings() }
+            if !active {
+                loadSettings()
+                if let liveInput { try? fm.removeItem(at: liveInput) }
+                liveInput = nil
+                livePID = nil
+            }
         }
     }
 
@@ -127,6 +164,7 @@ private struct EditorView: View {
     }
 
     private func loadSettings() {
+        supportsLiveOcarina = Self.checkLiveOcarinaSupport()
         if let value = read("graphics-canvas.txt").flatMap(Int.init), canvasNames.indices.contains(value) { canvas = value }
         if let value = read("graphics-net-bypass.txt").flatMap(Int.init), (0...1).contains(value) { upscaler = value }
         if let value = read("graphics-frame.txt"), value == "off"
@@ -248,30 +286,65 @@ private struct EditorView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private func launchTest() {
+    private static func checkLiveOcarinaSupport() -> Bool {
+        let runtime = gameApp.appending(path: "Contents/MacOS/OcarinaOfTime")
+        let lookup = Data("_ZN2nn3hid29IsOunceVibrationDeviceMountedERKNS0_21VibrationDeviceHandleE\0".utf8)
+        return (try? Data(contentsOf: runtime, options: .mappedIfSafe).range(of: lookup)) != nil
+    }
+
+    private func launchGame(test: Bool) {
         guard !isRunning else { message = "Quit the current game before starting a test."; return }
-        let app = home.appending(path: "Applications/Ocarina of Time.app")
-        guard let bundle = Bundle(url: app), bundle.bundleIdentifier == gameID,
+        guard let bundle = Bundle(url: gameApp), bundle.bundleIdentifier == gameID,
               bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == "131072" else {
             message = "Install the MacNativeGames OoT 131072 app in your Applications folder first."
             return
         }
         let configuration = NSWorkspace.OpenConfiguration()
-        configuration.environment = [
-            "OOT_AUTO_SKIP_OPENING": "1",
-            "TOTK_PROFILE_DIR": testProfile.path,
-            "TOTK_CLOUD_SAVE_DIR": "0",
-            "TOTK_ROMFS_MODS": "0",
-            "TOTK_INPUT_FILE": editorData.appending(path: "test-input.txt").path,
-        ]
+        let input = editorData.appending(path: "input-\(UUID().uuidString).txt")
+        configuration.environment = ["TOTK_INPUT_FILE": input.path]
+        if test {
+            configuration.environment.merge([
+                "OOT_AUTO_SKIP_OPENING": "1", "TOTK_PROFILE_DIR": testProfile.path,
+                "TOTK_CLOUD_SAVE_DIR": "0", "TOTK_ROMFS_MODS": "0",
+            ]) { _, new in new }
+        }
         busy = true
         Task {
             defer { busy = false }
             do {
                 _ = try withClosedGame { "" }
                 try fm.createDirectory(at: editorData, withIntermediateDirectories: true)
-                _ = try await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
-                message = "Opened the separate test profile. Choose Continue to resume its checkpoint."
+                try Data().write(to: input, options: .withoutOverwriting)
+                let application = try await NSWorkspace.shared.openApplication(at: gameApp, configuration: configuration)
+                liveInput = input
+                livePID = application.processIdentifier
+                message = test ? "Opened the separate test profile. Choose Continue to resume its checkpoint."
+                               : "Opened the player profile with Live Ocarina."
+            } catch {
+                try? fm.removeItem(at: input)
+                message = error.localizedDescription
+            }
+        }
+    }
+
+    private func playSong() {
+        guard supportsLiveOcarina, let input = liveInput, let pid = livePID else { return }
+        let notes = liveSongs[song].notes
+        playingSong = true
+        Task {
+            defer { playingSong = false }
+            do {
+                let file = try FileHandle(forWritingTo: input)
+                defer { try? file.close() }
+                for note in notes {
+                    guard livePID == pid, NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == gameID else {
+                        throw GameNotice(text: "The OoT session ended.")
+                    }
+                    try file.seekToEnd()
+                    try file.write(contentsOf: Data("key \(note) 125\n".utf8))
+                    try await Task.sleep(for: .milliseconds(250))
+                }
+                message = "Sent the song. Confirm any warp prompt in OoT."
             } catch {
                 message = error.localizedDescription
             }

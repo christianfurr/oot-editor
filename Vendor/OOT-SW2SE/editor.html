@@ -155,7 +155,7 @@ html.landing { overflow: hidden; }
   <p id="status" class="muted" role="status" aria-live="polite">Requires <code>progress.sav</code> and <code>caption.sav</code>.</p>
 </header>
 <main id="main" hidden>
-  <nav aria-label="Editor sections"><button type="button" data-jump="overview-section">Overview</button><button type="button" data-jump="edit-section">Stats</button><button type="button" data-jump="inventory-section">Inventory</button><button type="button" data-jump="flags-section">Progress</button><button type="button" data-jump="export-section">Export</button></nav>
+  <nav aria-label="Editor sections"><button type="button" data-jump="overview-section">Overview</button><button type="button" data-jump="edit-section">Stats</button><button type="button" data-jump="inventory-section">Inventory</button><button type="button" data-jump="world-section">World</button><button type="button" data-jump="flags-section">Progress</button><button type="button" data-jump="export-section">Export</button></nav>
   <section id="overview-section">
     <h2>Save Slot</h2>
     <div class="split"><dl id="overview"></dl><img id="preview" alt="Save preview" hidden></div>
@@ -225,6 +225,19 @@ html.landing { overflow: hidden; }
     </div>
     <p id="mask-menu-info" class="muted" hidden>The two amiibo masks share one equipment tile. The other eight masks share a second tile.</p>
     <div class="scroll"><table><thead><tr><th>Item</th><th>Category</th><th>In Save</th><th>Add</th><th>Remove</th><th>Clear acquisition flags</th></tr></thead><tbody id="inventory"></tbody></table></div>
+  </section>
+  <section id="world-section">
+    <h2>World &amp; Ocarina</h2>
+    <div class="grid"><label>Destination on next load<select id="travel-destination"></select></label></div>
+    <p class="muted">The editor moves this checkpoint without changing Link’s era or quest flags. The old preview picture stays until the game saves again.</p>
+    <p class="muted">Give Link songs for summoning Epona, skipping to the next day or night, and warping. Apply the save edits and reload in OoT.</p>
+    <div class="controls">
+      <button id="learn-epona" type="button">Learn Epona’s Song</button>
+      <button id="learn-sun" type="button">Learn Sun’s Song</button>
+      <button id="learn-warps" type="button">Learn Six Warp Songs</button>
+    </div>
+    <p id="world-result" class="muted" aria-live="polite"></p>
+    <p class="muted">Open the ocarina with Left on the D-pad. Hold ZL to view songs. Epona answers once Adult Link owns her and is in an area that allows summoning.</p>
   </section>
   <section id="flags-section">
     <h2>Progress Flags</h2>
@@ -402,6 +415,68 @@ const bottleContents = new Map([
   [0x74D62ECB, "bug"], [0x6F49E357, "fairy"], [0x73356827, "milk"], [0xEEF6E4B0, "half milk"],
 ]);
 const refillContents = new Set([0xEABA6067, 0x049D37C1, 0xF383D6E5, 0x6F49E357, 0x73356827]);
+const travelDestinations = {
+  hyrule: ['Hyrule Field', 'HyruleField', [
+    [[104.514, 154.897, 271.022], 1.2672, [106.44, 155.567, 271.55], [106.261, 155.508, 271.505], -104.4832],
+    [[155.323, 154.149, 35.418], -1.3256, [153.946, 153.97, 35.722], [154.076, 153.984, 35.702], 97.9094],
+  ]],
+  kokiri: ['Kokiri Forest', 'KokiriForest', [
+    [[-46.549, 118.432, 15.352], 1.649, [-46.549, 118.432, 15.352], [-46.549, 118.432, 15.352], -85.5178],
+    [[-46.087, 118.439, 15.394], 1.8949, [-46.087, 118.439, 15.394], [-46.087, 118.439, 15.394], -71.433],
+  ]],
+  kakariko: ['Kakariko Village', 'KakarikoVillage', [
+    [[-118.964, 96.68, 58.696], 1.5684, [-118.96, 96.68, 58.696], [-118.96, 96.68, 58.696], -90.1399],
+    [[-2.528, 101.535, 68.747], -1.64, [-2.899, 101.519, 68.721], [-2.844, 101.521, 68.725], 85.6471],
+  ]],
+};
+
+function writeWorldString(save, hash, length, value) {
+  const offset = save.block(hash, length);
+  save.bytes.fill(0, offset, offset + length);
+  save.bytes.set(utf8.encode(value), offset);
+}
+
+function writeWorldVector(save, hash, values) {
+  const offset = save.block(hash, 12);
+  values.forEach((value, index) => save.view.setFloat32(offset + index * 4, value, true));
+}
+
+function moveCheckpoint(progress, caption, destination) {
+  const [, region, variants] = travelDestinations[destination];
+  const child = progress.int(0xCEA220D3); // Sequence_IsChildhood
+  if (child !== 0 && child !== 1) throw Error('This save does not identify Link’s era.');
+  const banc = region + (child ? '_Child' : '_Adult');
+  const [position, facing, previous, grounded, cameraFacing] = variants[child];
+  writeWorldString(progress, 0x1D6189DA, 64, banc);
+  writeWorldString(progress, 0x4A6BDB7D, 32, destination === 'kokiri' ? banc : '');
+  writeWorldVector(progress, 0xC884818D, position);
+  writeWorldVector(progress, 0x960AD56A, previous);
+  writeWorldVector(progress, 0x8773F02D, grounded);
+  progress.view.setFloat32(progress.at(0x1EA93BD8), facing, true);
+  progress.view.setFloat32(progress.at(0xA4AEE8CD), cameraFacing, true);
+  writeWorldString(caption, 0xF74E0E8E, 64, region);
+  writeWorldString(caption, 0x0CCCC6CD, 64, region + '/' + banc);
+}
+
+const worldSongs = {
+  epona: [[0xB492AC33, 0xF4E14AC4]],
+  sun: [[0x165DD1AD, 0x56383EA6]],
+  warps: [
+    [0xDC0A0B54, 0x035F129A], [0x49041AB9, 0x570522B0],
+    [0x3FA63986, 0xAF0CEB1A], [0xC2FB95F4, 0xE631AD85],
+    [0x802A36A8, 0xB53851E0], [0xD6320BA4, 0xEF7B5505],
+  ],
+};
+function learnWorldSongs(save, groups, edits = new Map()) {
+  for (const group of groups) {
+    for (const hash of worldSongs[group].flat()) {
+      if (edits.get(hash) === false) throw Error('A world song conflicts with a progress flag edit.');
+      if (![0, 1].includes(save.int(hash))) throw Error('The save has an unsupported song flag.');
+      save.view.setInt32(save.at(hash), 1, true);
+    }
+  }
+}
+
 const quantityFields = [...supplies, ...smallKeys];
 const key = { rupees: 0xA77921D7, limit: 0xE0010A50, wallet: 0x3E42AFFA, previewRupees: 0xA9557547 };
 const vitalsFields = [
@@ -931,9 +1006,13 @@ function initialize() {
   let imageUrl;
   let revision = 0;
   let appliedRevision;
+  const learnedSongs = new Set();
   const perPage = 80;
 
   for (const w of wallets) wallet.add(new Option(w.label + ' · ' + w.limit, w.id));
+  const destination = get('travel-destination');
+  destination.add(new Option('Keep current checkpoint', ''));
+  for (const [id, [label]] of Object.entries(travelDestinations)) destination.add(new Option(label, id));
   const bottleFill = get('bottle-fill');
   bottleFill.add(new Option('Keep contents', '0'));
   for (const id of refillContents) bottleFill.add(new Option(bottleContents.get(id), String(id)));
@@ -1032,6 +1111,9 @@ function initialize() {
   }
   function reset() {
     get('quick-result').textContent = '';
+    get('world-result').textContent = '';
+    learnedSongs.clear();
+    destination.value = '';
     get('apply-profile').disabled = revision === appliedRevision;
     wallet.value = state.w.id;
     get('rupees').value = state.rupees;
@@ -1326,6 +1408,27 @@ function initialize() {
   get('max-hearts').addEventListener('input', updateVitalLimits);
   maxMagicSelect.addEventListener('change', updateVitalLimits);
   get('fill-magic').addEventListener('click', () => { get('magic').value = maxMagicSelect.value; });
+  function prepareSongs(group) {
+    if (worldSongs[group].flat().some(hash => !state.p.fields.has(hash) || ![0, 1].includes(state.p.int(hash)))) {
+      get('world-result').textContent = 'These songs are unavailable in this save format.';
+      return;
+    }
+    const fairyOcarina = 0xB7DF60F1;
+    const ocarinaOfTime = 0x54E2A3D1;
+    if (state.p.int(fairyOcarina) === 0 && state.p.int(ocarinaOfTime) === 0) {
+      inventoryRemovals.delete(fairyOcarina);
+      clearAcquisitions.delete(fairyOcarina);
+      inventoryAdditions.add(fairyOcarina);
+      inventory();
+    }
+    learnedSongs.add(group);
+    get('world-result').textContent = 'Queued: ' + [...learnedSongs].map(key => ({
+      epona: 'Epona’s Song', sun: 'Sun’s Song', warps: 'six warp songs',
+    })[key]).join(', ') + '.';
+  }
+  for (const [group, button] of [['epona', 'learn-epona'], ['sun', 'learn-sun'], ['warps', 'learn-warps']]) {
+    get(button).addEventListener('click', () => prepareSongs(group));
+  }
   get('quick-heal').addEventListener('click', () => {
     get('hearts').value = get('max-hearts').value;
     get('magic').value = maxMagicSelect.value;
@@ -1381,6 +1484,13 @@ function initialize() {
         additions: inventoryAdditions, removals: inventoryRemovals, clearAcquisitions, flags: flagChanges,
       };
       const after = updateSlot(state, changes, editable);
+      if (learnedSongs.size) {
+        learnWorldSongs(readSave(after[0], 0x175D8), learnedSongs, flagChanges);
+      }
+      if (destination.value) {
+        if (flagChanges.has(0xCEA220D3)) throw Error('Clear the manual era edit before moving a checkpoint.');
+        moveCheckpoint(readSave(after[0], 0x175D8), readSave(after[1], 0x2A0), destination.value);
+      }
       const edits = slotEdits(active, state, after);
       const language = Number(voiceSelect.value);
       if (options && language !== options.language) {

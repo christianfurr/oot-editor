@@ -29,6 +29,7 @@ private struct EditorView: View {
     @State private var frame = "off"
     @State private var running = false
     @State private var busy = false
+    @State private var workshop: EditorWindowController?
 
     private let canvasNames = ["720p from 480p", "720p native", "1080p from 720p", "1080p native",
                                "1440p from 1080p", "1440p native"]
@@ -87,6 +88,18 @@ private struct EditorView: View {
                     }
                 }.padding(8)
             }
+            GroupBox("Save Workshop") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Edit items, rupees, health, equipment and progression on a save copy. Export replacements as a folder or ZIP.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Edit Test Save…") { showWorkshop(testProfile) }
+                        Button("Edit Player Save Copy…") { openPlayerCopy() }.disabled(running || busy)
+                        Spacer()
+                        Button("Open Backups") { reveal(editorData.appending(path: "Backups")) }
+                    }
+                }.padding(8)
+            }
             Text(message).font(.callout).foregroundStyle(.secondary).lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -128,7 +141,7 @@ private struct EditorView: View {
         catch { message = error.localizedDescription }
     }
 
-    private func withClosedGame(_ operation: () throws -> String) throws -> String {
+    private func withClosedGame<T>(_ operation: () throws -> T) throws -> T {
         guard !isRunning else { throw GameNotice(text: "Quit OoT before changing or backing up the player profile.") }
         let slot = support.appending(path: "TOTK/game-slot")
         try fm.createDirectory(at: slot, withIntermediateDirectories: true)
@@ -153,28 +166,74 @@ private struct EditorView: View {
     }
 
     private func backup() throws -> String {
-        try withClosedGame {
-            let save = profile.appending(path: "save")
-            let files = fm.enumerator(at: save, includingPropertiesForKeys: [.isRegularFileKey])
-            let hasSave = files?.compactMap { $0 as? URL }.contains {
-                (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
-            } ?? false
-            guard hasSave else { throw GameNotice(text: "Create a player save in OoT first.") }
-            let snapshots = editorData.appending(path: "Backups")
-            try fm.createDirectory(at: snapshots, withIntermediateDirectories: true)
-            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-            let copy = snapshots.appending(path: "\(stamp)-\(UUID().uuidString.prefix(6))")
-            try fm.createDirectory(at: copy, withIntermediateDirectories: false)
-            do {
-                try fm.copyItem(at: save, to: copy.appending(path: "save"))
-                let users = profile.appending(path: "users.txt")
-                if fm.fileExists(atPath: users.path) { try fm.copyItem(at: users, to: copy.appending(path: "users.txt")) }
-            } catch {
-                try? fm.removeItem(at: copy)
-                throw error
+        let copy = try withClosedGame { try createBackup() }
+        reveal(copy)
+        return "Player save backed up."
+    }
+
+    private func createBackup() throws -> URL {
+        let save = profile.appending(path: "save")
+        let files = fm.enumerator(at: save, includingPropertiesForKeys: [.isRegularFileKey])
+        let hasSave = files?.compactMap { $0 as? URL }.contains {
+            (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+        } ?? false
+        guard hasSave else { throw GameNotice(text: "Create a player save in OoT first.") }
+        let snapshots = editorData.appending(path: "Backups")
+        try fm.createDirectory(at: snapshots, withIntermediateDirectories: true)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let copy = snapshots.appending(path: "\(stamp)-\(UUID().uuidString.prefix(6))")
+        try fm.createDirectory(at: copy, withIntermediateDirectories: false)
+        do {
+            try fm.copyItem(at: save, to: copy.appending(path: "save"))
+            let users = profile.appending(path: "users.txt")
+            if fm.fileExists(atPath: users.path) { try fm.copyItem(at: users, to: copy.appending(path: "users.txt")) }
+        } catch {
+            try? fm.removeItem(at: copy)
+            throw error
+        }
+        return copy
+    }
+
+    private var testProfile: URL { editorData.appending(path: "Test Profile") }
+
+    private func saveAccount(in root: URL) -> URL {
+        let save = root.appending(path: "save")
+        let accounts = (try? fm.contentsOfDirectory(at: save, includingPropertiesForKeys: nil)) ?? []
+        let candidates = accounts.filter { account in
+            (0..<6).contains { index in
+                let slot = account.appending(path: String(format: "slot_%02d", index))
+                return fm.fileExists(atPath: slot.appending(path: "progress.sav").path)
+                    && fm.fileExists(atPath: slot.appending(path: "caption.sav").path)
             }
-            reveal(copy)
-            return "Player save backed up."
+        }
+        return candidates.count == 1 ? candidates[0] : save
+    }
+
+    private func focusOpenWorkshop() -> Bool {
+        guard let window = workshop?.window, window.isVisible || window.isMiniaturized else { return false }
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+        message = "Save Workshop is already open. Close that window to start editing a different copy."
+        return true
+    }
+
+    private func showWorkshop(_ root: URL) {
+        guard !focusOpenWorkshop() else { return }
+        let folder = saveAccount(in: root)
+        let editor = EditorWindowController(defaultFolder: folder)
+        workshop = editor
+        editor.showWindow(nil)
+        editor.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func openPlayerCopy() {
+        guard !focusOpenWorkshop() else { return }
+        do {
+            let copy = try withClosedGame { try createBackup() }
+            showWorkshop(copy)
+            message = "Created a copy. Choose Open Backup in Save Workshop to load it."
+        } catch {
+            message = error.localizedDescription
         }
     }
 
@@ -194,7 +253,7 @@ private struct EditorView: View {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.environment = [
             "OOT_AUTO_SKIP_OPENING": "1",
-            "TOTK_PROFILE_DIR": editorData.appending(path: "Test Profile").path,
+            "TOTK_PROFILE_DIR": testProfile.path,
             "TOTK_CLOUD_SAVE_DIR": "0",
             "TOTK_ROMFS_MODS": "0",
             "TOTK_INPUT_FILE": editorData.appending(path: "test-input.txt").path,
